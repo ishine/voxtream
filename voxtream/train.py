@@ -1,10 +1,10 @@
+import sys
 from functools import partial
 from pathlib import Path
 
 import hydra
 import lightning as L
 import torch
-from dataset import TrainDataset, collate_fn
 from huggingface_hub import snapshot_download
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
@@ -12,6 +12,8 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
+sys.path.append(str(Path(__file__).parent.parent))
+from voxtream.dataset import TrainDataset, collate_fn
 from voxtream.trainer import Trainer
 
 torch.set_float32_matmul_precision("medium")
@@ -45,6 +47,7 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
         collate_fn=collate_func,
+        drop_last=True,
     )
 
     # Callbacks

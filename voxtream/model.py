@@ -33,7 +33,7 @@ class ModelConfig:
 
 
 class Model(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, compile_forward: bool = False):
         super().__init__()
         self.config = config
 
@@ -92,6 +92,13 @@ class Model(nn.Module):
             create_mask(self.config.num_codebooks, config.audio_window_size),
             persistent=False,
         )
+
+        if compile_forward:
+            self.forward_audio_fn = torch.compile(
+                model=self.forward_audio, dynamic=False, mode="max-autotune"
+            )
+        else:
+            self.forward_audio_fn = self.forward_audio
 
     @staticmethod
     def reorder_phone_emb(
@@ -228,17 +235,15 @@ class Model(nn.Module):
 
         return frame, pred_shift
 
-    def forward(
+    def forward_audio(
         self,
-        phone_tokens: torch.Tensor,
-        phoneme_embedding_indices: torch.Tensor,
+        phone_emb: torch.Tensor,
         audio_tokens: torch.Tensor,
         spk_embeddings: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         Args:
-            phone_tokens: (batch_size, phone_seq_len)
-            phoneme_embedding_indices: (batch_size, seq_len, 2)
+            phone_emb: (batch_size, seq_len, dim)
             audio_tokens: (batch_size, num_codebooks, seq_len)
             spk_embeddings: (batch_size, spk_emb_dim)
 
@@ -247,9 +252,6 @@ class Model(nn.Module):
             audio_logits: (batch_size, dim, num_codebooks - 1, audio_seq_len)
             rand_idx: (amortized_seq_len,)
         """
-        phone_emb = self.extract_phoneme_embeddings(
-            phone_tokens, phoneme_embedding_indices=phoneme_embedding_indices
-        )
         audio_emb = self._embed_audio_tokens(audio_tokens)
 
         # exclude last pad audio token
@@ -305,17 +307,42 @@ class Model(nn.Module):
 
         # remove prediction for the first codebook
         dep_former_h = dep_former_h[:, 1:]
-
-        # Head
         dep_former_h = dep_former_h.reshape(
             (bs, len(rand_idx), self.config.num_codebooks - 1, -1)
         )
 
-        audio_logits = []
-        for i in range(self.config.num_codebooks - 1):
-            ci_logits = torch.matmul(dep_former_h[:, :, i], self.audio_head[i])
-            audio_logits.append(ci_logits)
-        audio_logits = torch.stack(audio_logits).permute(1, 3, 0, 2)
+        # head
+        audio_logits = torch.einsum(
+            "b s c d, c d k -> b k c s", dep_former_h, self.audio_head
+        ).contiguous()
+
+        return sem_logits, audio_logits, rand_idx
+
+    def forward(
+        self,
+        phone_tokens: torch.Tensor,
+        phoneme_embedding_indices: torch.Tensor,
+        audio_tokens: torch.Tensor,
+        spk_embeddings: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            phone_tokens: (batch_size, phone_seq_len)
+            phoneme_embedding_indices: (batch_size, seq_len, N)
+            audio_tokens: (batch_size, num_codebooks, seq_len)
+            spk_embeddings: (batch_size, spk_emb_dim)
+
+        Returns:
+            sem_logits: (batch_size, dim, seq_len)
+            audio_logits: (batch_size, dim, num_codebooks - 1, audio_seq_len)
+            rand_idx: (amortized_seq_len,)
+        """
+        phone_emb = self.extract_phoneme_embeddings(
+            phone_tokens, phoneme_embedding_indices=phoneme_embedding_indices
+        )
+        sem_logits, audio_logits, rand_idx = self.forward_audio_fn(
+            phone_emb, audio_tokens, spk_embeddings
+        )
 
         return sem_logits, audio_logits, rand_idx
 

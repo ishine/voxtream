@@ -23,7 +23,7 @@ class Trainer(L.LightningModule):
 
         # Init model
         model_config = ModelConfig(**config.model)
-        self.model = Model(model_config)
+        self.model = Model(model_config, config.compile_forward)
 
         if config.dep_former_name is not None:
             dep_former_weight_path = hf_hub_download(

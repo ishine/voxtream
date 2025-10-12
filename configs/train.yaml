@@ -23,6 +23,7 @@ gpus: -1
 logging_interval: step
 save_weights_only: true
 strategy: ddp
+compile_forward: true
 
 dataset:
   datasets:
